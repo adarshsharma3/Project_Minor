@@ -1,0 +1,8 @@
+City			Temperature (°C)	Humidity (%)	Wind Speed (km/h)	Weather Description
+New York		18		65		15		Clear
+
+Client 0: 4567
+Client 0: City			Temperature (°C)	Humidity (%)	Wind Speed (km/h)	Weather DescriptionNew York		18		65		15		Clear
+Client 0: This is new York Data
+Client 1: 34
+Client 1: : Temp-22 Humidity -23 Wind Speed 23 overal-Cloudy
