@@ -5,15 +5,113 @@
 #include <string>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <cmath>
+#include <limits>
 
-#define PORT_MODEL 9090
 #define PORT_MAIN 8080
 #define ROWS_PER_CLIENT 120
 #define TOTAL_ROWS 602  // Total number of rows in your dataset
 
+// Data structure for storing dataset rows
+struct DataRow {
+    std::vector<double> features;
+    int label;
+};
+
+// SVM Model class
+class SVMModel {
+public:
+    std::vector<std::vector<double>> support_vectors;
+    std::vector<double> coefficients;
+    double intercept;
+
+    // Simplified training function
+    void train(const std::vector<DataRow>& data) {
+        int numFeatures = data[0].features.size();
+        int numSamples = data.size();
+
+        coefficients = std::vector<double>(numFeatures, 0.0);
+        intercept = 0.0;
+
+        double C = 1.0;             // Regularization parameter
+        double learning_rate = 0.01;
+        int max_iterations = 1000;
+        double tolerance = 1e-3;
+
+        for (int iter = 0; iter < max_iterations; ++iter) {
+            double cost = 0.0;
+            std::vector<double> gradient(numFeatures, 0.0);
+            double intercept_gradient = 0.0;
+
+            for (int i = 0; i < numSamples; ++i) {
+                const auto& row = data[i];
+                const auto& features = row.features;
+                int label = row.label;
+
+                double decision_value = intercept;
+                for (int j = 0; j < numFeatures; ++j) {
+                    decision_value += coefficients[j] * features[j];
+                }
+
+                double margin = 1 - label * decision_value;
+                if (margin > 0) {
+                    for (int j = 0; j < numFeatures; ++j) {
+                        gradient[j] += -label * features[j];
+                    }
+                    intercept_gradient += -label;
+                    cost += margin;
+                }
+
+                for (int j = 0; j < numFeatures; ++j) {
+                    gradient[j] += 2 * coefficients[j];
+                }
+            }
+
+            for (int j = 0; j < numFeatures; ++j) {
+                coefficients[j] -= learning_rate * gradient[j] / numSamples;
+            }
+            intercept -= learning_rate * intercept_gradient / numSamples;
+
+            if (cost < tolerance) break;
+        }
+
+        for (int i = 0; i < numSamples; ++i) {
+            const auto& row = data[i];
+            const auto& features = row.features;
+            int label = row.label;
+
+            double decision_value = intercept;
+            for (int j = 0; j < numFeatures; ++j) {
+                decision_value += coefficients[j] * features[j];
+            }
+
+            if (1 - label * decision_value > 0) {
+                support_vectors.push_back(features);
+            }
+        }
+    }
+
+    std::string getModelParameters() {
+        std::stringstream ss;
+        ss << "Support Vectors:\n";
+        for (const auto& vec : support_vectors) {
+            for (const auto& value : vec) {
+                ss << value << " ";
+            }
+            ss << "\n";
+        }
+        ss << "Coefficients:\n";
+        for (const auto& coeff : coefficients) {
+            ss << coeff << " ";
+        }
+        ss << "\nIntercept: " << intercept << std::endl;
+        return ss.str();
+    }
+};
+
 // Load data from CSV file for a specific range of rows
-std::vector<std::vector<double>> loadData(int startRow, int rowCount) {
-    std::vector<std::vector<double>> data;
+std::vector<DataRow> loadData(int startRow, int rowCount) {
+    std::vector<DataRow> data;
     std::ifstream file("dataset.csv");
     std::string line;
     int currentRow = 0;
@@ -21,12 +119,14 @@ std::vector<std::vector<double>> loadData(int startRow, int rowCount) {
     while (std::getline(file, line)) {
         if (currentRow >= startRow && currentRow < startRow + rowCount) {
             std::istringstream ss(line);
-            std::vector<double> row;
+            DataRow row;
             double value;
             while (ss >> value) {
-                row.push_back(value);
+                row.features.push_back(value);
                 if (ss.peek() == ',') ss.ignore();
             }
+            row.label = static_cast<int>(row.features.back());
+            row.features.pop_back();
             data.push_back(row);
         }
         currentRow++;
@@ -35,77 +135,29 @@ std::vector<std::vector<double>> loadData(int startRow, int rowCount) {
 }
 
 int main() {
-    int sock_model = 0, sock_main = 0;
-    struct sockaddr_in serv_addr_model, serv_addr_main;
+    int sock_main = 0;
+    struct sockaddr_in serv_addr_main;
 
-    // Create socket for Model Server
-    if ((sock_model = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        std::cerr << "Socket creation error for Model Server" << std::endl;
-        return -1;
-    }
-
-    serv_addr_model.sin_family = AF_INET;
-    serv_addr_model.sin_port = htons(PORT_MODEL);
-
-    // Convert IPv4 and IPv6 addresses from text to binary form for Model Server
-    if (inet_pton(AF_INET, "127.0.0.1", &serv_addr_model.sin_addr) <= 0) {
-        std::cerr << "Invalid address for Model Server" << std::endl;
-        return -1;
-    }
-
-    // Connect to the Model Server directly
-    if (connect(sock_model, (struct sockaddr*)&serv_addr_model, sizeof(serv_addr_model)) < 0) {
-        std::cerr << "Connection Failed to Model Server" << std::endl;
-        return -1;
-    }
-
-    // Ask for the client ID
     int client_id;
     std::cout << "Enter your client ID (1 to 5): ";
     std::cin >> client_id;
 
-    // Calculate the range of rows for this client
     int startRow = (client_id - 1) * ROWS_PER_CLIENT;
     int rowCount = ROWS_PER_CLIENT;
-
-    // Adjust rowCount for last client if there are less than 120 rows remaining
     if (startRow + rowCount > TOTAL_ROWS) {
         rowCount = TOTAL_ROWS - startRow;
     }
 
-    std::cout << "Client ID: " << client_id << ", Sending startRow: " << startRow << ", rowCount: " << rowCount << std::endl;
-
-    // Here we load the data (even though we won't send it, you can keep this for debugging or later use)
     auto data = loadData(startRow, rowCount);
 
-    // Serialize the startRow and rowCount to a string format to send to Model Server
-    std::string dataStr = std::to_string(startRow) + "," + std::to_string(rowCount) + "\n";
+    // Train SVM model using loaded data
+    SVMModel model;
+    model.train(data);
 
-    // Send startRow and rowCount to Model Server
-    send(sock_model, dataStr.c_str(), dataStr.size(), 0);
-    std::cout << "Sent startRow and rowCount to Model Server" << std::endl;
+    // Get model parameters as a string
+    std::string modelParams = model.getModelParameters();
 
-    // Receive acknowledgment from Model Server
-    char ack_buffer[1024] = {0};
-    int bytesReceived = recv(sock_model, ack_buffer, sizeof(ack_buffer), 0);
-    if (bytesReceived > 0) {
-        ack_buffer[bytesReceived] = '\0';  // Null-terminate the received acknowledgment
-        std::cout << "Received acknowledgment from Model Server: " << ack_buffer << std::endl;
-    } else {
-        std::cerr << "Failed to receive acknowledgment from Model Server" << std::endl;
-        close(sock_model);
-        return -1;
-    }
-
-    // Now, receive model parameters from Model Server
-    char model_params[1024] = {0};
-    read(sock_model, model_params, sizeof(model_params));
-    std::cout << "Received model parameters from Model Server: " << model_params << std::endl;
-
-    // Close the connection to Model Server
-    close(sock_model);
-
-    // Now, send the acknowledgment message and model parameters to the Main Server
+    // Create socket for Main Server
     if ((sock_main = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         std::cerr << "Socket creation error for Main Server" << std::endl;
         return -1;
@@ -113,8 +165,6 @@ int main() {
 
     serv_addr_main.sin_family = AF_INET;
     serv_addr_main.sin_port = htons(PORT_MAIN);
-
-    // Convert IPv4 and IPv6 addresses from text to binary form for Main Server
     if (inet_pton(AF_INET, "127.0.0.1", &serv_addr_main.sin_addr) <= 0) {
         std::cerr << "Invalid address for Main Server" << std::endl;
         return -1;
@@ -126,14 +176,12 @@ int main() {
         return -1;
     }
 
-    // Construct the message to send to Main Server
+    // Construct and send message to Main Server
     std::string message = "Client ID: " + std::to_string(client_id) + "\n";
-    message += "Acknowledgment: " + std::string(ack_buffer) + "\n";
-    message += "Model Parameters: " + std::string(model_params) + "\n";
+    message += "Model Parameters:\n" + modelParams;
 
-    // Send the acknowledgment and model parameters to Main Server
     send(sock_main, message.c_str(), message.size(), 0);
-    std::cout << "Sent acknowledgment and model parameters to Main Server" << std::endl;
+    std::cout << "Sent model parameters to Main Server" << std::endl;
 
     // Close the connection to Main Server
     close(sock_main);
