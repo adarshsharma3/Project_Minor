@@ -1,1 +1,1 @@
-A Federative Learning  based model for predicting weather 
+A Federative Learning  based model for weather prediction
